@@ -100,8 +100,53 @@ export async function preProcessImageContent(
     type: "image_url",
     image_url: { url },
   })) as Promise<MultimodalContent[] | string>;
-}
+  }
+export async function preProcessImageContentForResponses(
+  content: RequestMessage["content"],
+  role: string = "user",
+) {
+  const processed = await preProcessImageContentBase(content, async (url) => ({
+    type: "input_image",
+    image_url: url,
+  }));
 
+  if (typeof processed === "string") {
+    return [
+  {
+    type: role === "assistant" ? "output_text" : "input_text",
+    text: processed,
+  },
+];
+  }
+
+  return processed
+  .map((part: any) => {
+    if (
+      part?.type === "text" ||
+      part?.type === "input_text" ||
+      part?.type === "output_text"
+    ) {
+      return {
+        type: role === "assistant" ? "output_text" : "input_text",
+        text: part.text ?? "",
+      };
+    }
+
+    if (part?.type === "input_image" || part?.type === "image_url") {
+      if (role === "assistant") {
+        return {
+          type: "output_text",
+          text: "[Imagen adjunta/generada]",
+        };
+      }
+
+      return part;
+    }
+
+    return null;
+  })
+  .filter(Boolean);
+  }
 export async function preProcessImageContentForAlibabaDashScope(
   content: RequestMessage["content"],
 ) {

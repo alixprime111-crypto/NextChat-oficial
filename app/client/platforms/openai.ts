@@ -19,6 +19,7 @@ import {
 import { collectModelsWithDefaultModel } from "@/app/utils/model";
 import {
   preProcessImageContent,
+  preProcessImageContentForResponses,
   uploadImage,
   base64Image2Blob,
   streamWithThink,
@@ -126,6 +127,43 @@ export class ChatGPTApi implements LLMApi {
       return "```\n" + JSON.stringify(res, null, 4) + "\n```";
     }
     // dalle3 model return url, using url create image message
+    if (Array.isArray(res.output)) {
+  const parts: any[] = [];
+
+  for (const item of res.output) {
+    if (item?.type === "message" && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (part?.type === "output_text" && part.text) {
+          parts.push({
+            type: "text",
+            text: part.text,
+          });
+        }
+      }
+    }
+
+    if (item?.type === "image_generation_call" && item.result) {
+      const url = await uploadImage(
+        base64Image2Blob(item.result, "image/png"),
+      );
+
+      parts.push({
+        type: "image_url",
+        image_url: {
+          url,
+        },
+      });
+    }
+  }
+
+  if (parts.length === 1 && parts[0].type === "text") {
+    return parts[0].text;
+  }
+
+  if (parts.length > 0) {
+    return parts;
+  }
+}
     if (res.data) {
       let url = res.data?.at(0)?.url ?? "";
       const b64_json = res.data?.at(0)?.b64_json ?? "";
@@ -193,7 +231,7 @@ export class ChatGPTApi implements LLMApi {
       },
     };
 
-    let requestPayload: RequestPayload | DalleRequestPayload;
+    let requestPayload: RequestPayload | DalleRequestPayload | Record<string, any>;
 
     const isDalle3 = _isDalle3(options.config.model);
     const isImageModel =
@@ -203,6 +241,7 @@ export class ChatGPTApi implements LLMApi {
       options.config.model.startsWith("o3") ||
       options.config.model.startsWith("o4-mini");
     const isGpt5 =  options.config.model.startsWith("gpt-5");
+    const useResponsesApi = options.config.model === "gpt-5.4-mini";
     if (isImageModel) {
       const prompt = getMessageTextContent(
         options.messages.slice(-1)?.pop() as any,
@@ -223,27 +262,51 @@ export class ChatGPTApi implements LLMApi {
       const visionModel = isVisionModel(options.config.model);
       const messages: ChatOptions["messages"] = [];
       for (const v of options.messages) {
-        const content = visionModel
-          ? await preProcessImageContent(v.content)
-          : getMessageTextContent(v);
-        if (!(isO1OrO3 && v.role === "system"))
-          messages.push({ role: v.role, content });
-      }
+  let content = useResponsesApi
+    ? await preProcessImageContentForResponses(v.content, v.role)
+    : visionModel
+    ? await preProcessImageContent(v.content)
+    : getMessageTextContent(v);
 
+  if (useResponsesApi && v.role === "assistant" && Array.isArray(content)) {
+    content = content.map((part: any) =>
+      part?.type === "input_text"
+        ? { ...part, type: "output_text" }
+        : part,
+    );
+  }
+
+  if (!(isO1OrO3 && v.role === "system")) {
+    messages.push({ role: v.role, content });
+  }
+}      
       // O1 not support image, tools (plugin in ChatGPTNextWeb) and system, stream, logprobs, temperature, top_p, n, presence_penalty, frequency_penalty yet.
-      requestPayload = {
-        messages,
-        stream: options.config.stream,
-        model: modelConfig.model,
-        temperature: (!isO1OrO3 && !isGpt5) ? modelConfig.temperature : 1,
-        presence_penalty: !isO1OrO3 ? modelConfig.presence_penalty : 0,
-        frequency_penalty: !isO1OrO3 ? modelConfig.frequency_penalty : 0,
-        top_p: !isO1OrO3 ? modelConfig.top_p : 1,
-        // max_tokens: Math.max(modelConfig.max_tokens, 1024),
-        // Please do not ask me why not send max_tokens, no reason, this param is just shit, I dont want to explain anymore.
-      };
+   requestPayload = useResponsesApi
+  ? {
+      model: modelConfig.model,
+      input: messages,
+      stream: false,
+      tools: [
+        {
+          type: "image_generation",
+          model: "gpt-image-2.5-flare",
+          quality: "medium",
+          size: "1024x1024",
+          action: "auto",
+        },
+      ],
+    }
+  : {
+      messages,
+      stream: options.config.stream,
+      model: modelConfig.model,
+      temperature: (!isO1OrO3 && !isGpt5) ? modelConfig.temperature : 1,
+      presence_penalty: !isO1OrO3 ? modelConfig.presence_penalty : 0,
+      frequency_penalty: !isO1OrO3 ? modelConfig.frequency_penalty : 0,
+      top_p: !isO1OrO3 ? modelConfig.top_p : 1,
+    };
 
-      if (isGpt5) {
+      if (isGpt5 && !useResponsesApi) {
   	// Remove max_tokens if present
   	delete requestPayload.max_tokens;
   	// Add max_completion_tokens (or max_completion_tokens if that's what you meant)
@@ -271,7 +334,8 @@ export class ChatGPTApi implements LLMApi {
 
     console.log("[Request] openai payload: ", requestPayload);
 
-    const shouldStream = !isImageModel && !!options.config.stream;
+    const shouldStream =
+  !isImageModel && !useResponsesApi && !!options.config.stream;
     const controller = new AbortController();
     options.onController?.(controller);
 
@@ -304,8 +368,12 @@ export class ChatGPTApi implements LLMApi {
         );
       } else {
         chatPath = this.path(
-          isImageModel ? OpenaiPath.ImagePath : OpenaiPath.ChatPath,
-        );
+  isImageModel
+    ? OpenaiPath.ImagePath
+    : useResponsesApi
+      ? OpenaiPath.ResponsesPath
+      : OpenaiPath.ChatPath,
+);
       }
       if (shouldStream) {
         let index = -1;
