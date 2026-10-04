@@ -405,10 +405,15 @@ export const useChatStore = createPersistStore(
       },
 
       async onUserInput(
-        content: string,
-        attachImages?: string[],
-        isMcpResponse?: boolean,
-      ) {
+  content: string,
+  attachImages?: string[],
+  isMcpResponse?: boolean,
+  attachFiles?: {
+    url: string;
+    name: string;
+    mimeType: string;
+  }[],
+) {
         const session = get().currentSession();
         const modelConfig = session.mask.modelConfig;
 
@@ -417,15 +422,23 @@ export const useChatStore = createPersistStore(
           ? content
           : fillTemplateWith(content, modelConfig);
 
-        if (!isMcpResponse && attachImages && attachImages.length > 0) {
-          mContent = [
-            ...(content ? [{ type: "text" as const, text: content }] : []),
-            ...attachImages.map((url) => ({
-              type: "image_url" as const,
-              image_url: { url },
-            })),
-          ];
-        }
+       if (
+  !isMcpResponse &&
+  ((attachImages && attachImages.length > 0) ||
+    (attachFiles && attachFiles.length > 0))
+) {
+  mContent = [
+    ...(content ? [{ type: "text" as const, text: content }] : []),
+    ...(attachImages ?? []).map((url) => ({
+      type: "image_url" as const,
+      image_url: { url },
+    })),
+    ...(attachFiles ?? []).map((file) => ({
+      type: "file" as const,
+      file,
+    })),
+  ];
+}
 
         let userMessage: ChatMessage = createMessage({
           role: "user",
@@ -699,6 +712,12 @@ export const useChatStore = createPersistStore(
               startIndex < messages.length ? startIndex : messages.length - 1,
               messages.length,
             )
+              .map((msg) =>
+  createMessage({
+    role: msg.role,
+    content: getMessageTextContent(msg),
+  }),
+)
             .concat(
               createMessage({
                 role: "user",

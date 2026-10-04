@@ -77,8 +77,10 @@ import {
   showPlugins,
 } from "../utils";
 
-import { uploadImage as uploadImageRemote } from "@/app/utils/chat";
-
+import {
+  uploadImage as uploadImageRemote,
+  uploadFile,
+} from "@/app/utils/chat";
 import dynamic from "next/dynamic";
 
 import { ChatControllerPool } from "../client/controller";
@@ -1032,6 +1034,9 @@ function _Chat() {
   const isMobileScreen = useMobileScreen();
   const navigate = useNavigate();
   const [attachImages, setAttachImages] = useState<string[]>([]);
+  const [attachFiles, setAttachFiles] = useState<
+  { url: string; name: string; mimeType: string }[]
+>([]);
   const [uploading, setUploading] = useState(false);
 
   // prompt hints
@@ -1113,9 +1118,10 @@ function _Chat() {
     }
     setIsLoading(true);
     chatStore
-      .onUserInput(userInput, attachImages)
+      .onUserInput(userInput, attachImages, undefined, attachFiles)
       .then(() => setIsLoading(false));
     setAttachImages([]);
+    setAttachFiles([]);
     chatStore.setLastInput(userInput);
     setUserInput("");
     setPromptHints([]);
@@ -1561,30 +1567,62 @@ function _Chat() {
         const fileInput = document.createElement("input");
         fileInput.type = "file";
         fileInput.accept =
-          "image/png, image/jpeg, image/webp, image/heic, image/heif";
+  "image/png, image/jpeg, image/webp, image/heic, image/heif, application/pdf, application/msword, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
         fileInput.multiple = true;
         fileInput.onchange = (event: any) => {
-          setUploading(true);
           const files = event.target.files;
+          setUploading(true);
           const imagesData: string[] = [];
-          for (let i = 0; i < files.length; i++) {
-            const file = event.target.files[i];
-            uploadImageRemote(file)
-              .then((dataUrl) => {
-                imagesData.push(dataUrl);
-                if (
-                  imagesData.length === 3 ||
-                  imagesData.length === files.length
-                ) {
-                  setUploading(false);
-                  res(imagesData);
-                }
-              })
-              .catch((e) => {
-                setUploading(false);
-                rej(e);
-              });
-          }
+const filesData: {
+  url: string;
+  name: string;
+  mimeType: string;
+}[] = [];
+
+for (let i = 0; i < files.length; i++) {
+  const file = files[i];
+
+  if (file.type.startsWith("image/")) {
+    uploadImageRemote(file)
+      .then((dataUrl) => {
+        imagesData.push(dataUrl);
+
+        if (
+          imagesData.length + filesData.length === files.length
+        ) {
+          setUploading(false);
+          res(imagesData);
+          setAttachFiles((prev) => [...prev, ...filesData]);
+        }
+      })
+      .catch((e) => {
+        setUploading(false);
+        rej(e);
+      });
+  } else {
+    uploadFile(file)
+      .then((fileUrl) => {
+        filesData.push({
+          url: fileUrl,
+          name: file.name,
+          mimeType: file.type,
+        });
+
+        if (
+          imagesData.length + filesData.length === files.length
+        ) {
+          setUploading(false);
+          res(imagesData);
+          setAttachFiles((prev) => [...prev, ...filesData]);
+        }
+      })
+      .catch((e) => {
+        setUploading(false);
+        rej(e);
+      });
+  }
+}
+
         };
         fileInput.click();
       })),
@@ -2116,6 +2154,26 @@ function _Chat() {
                     })}
                   </div>
                 )}
+                {attachFiles.length != 0 && (
+  <div className={styles["attach-images"]}>
+    {attachFiles.map((file, index) => (
+      <div key={index} className={styles["attach-file"]}>
+        <div style={{ padding: "8px", wordBreak: "break-word" }}>
+          {file.name}
+        </div>
+        <div className={styles["attach-image-mask"]}>
+          <DeleteImageButton
+            deleteImage={() => {
+              setAttachFiles(
+                attachFiles.filter((_, i) => i !== index),
+              );
+            }}
+          />
+        </div>
+      </div>
+    ))}
+  </div>
+)}
                 <IconButton
                   icon={<SendWhiteIcon />}
                   text={Locale.Chat.Send}

@@ -221,6 +221,35 @@ export class ChatGPTApi implements LLMApi {
     }
   }
 
+  async uploadFileToOpenAI(fileUrl: string, filename: string): Promise<string> {
+  const fileRes = await fetch(fileUrl);
+
+  if (!fileRes.ok) {
+    throw new Error(`No se pudo leer el archivo: ${fileRes.status}`);
+  }
+
+  const blob = await fileRes.blob();
+
+  const formData = new FormData();
+  formData.append("purpose", "user_data");
+  formData.append("file", blob, filename);
+
+  const res = await fetch(this.path(OpenaiPath.FilesPath), {
+    method: "POST",
+    headers: getHeaders(true),
+    body: formData,
+  });
+
+  const data = await res.json();
+
+  if (!res.ok || !data?.id) {
+    throw new Error(
+      data?.error?.message || "Error al subir el archivo a OpenAI",
+    );
+  }
+
+  return data.id;
+}
   async chat(options: ChatOptions) {
     const modelConfig = {
       ...useAppConfig.getState().modelConfig,
@@ -267,6 +296,29 @@ export class ChatGPTApi implements LLMApi {
     : visionModel
     ? await preProcessImageContent(v.content)
     : getMessageTextContent(v);
+
+    if (useResponsesApi && v.role !== "assistant" && Array.isArray(content)) {
+  content = await Promise.all(
+    content.map(async (part: any) => {
+      if (part?.type === "input_file" && part?.file_url) {
+        const filename =
+          part.file_url.split("/").pop() || "archivo";
+
+        const fileId = await this.uploadFileToOpenAI(
+          part.file_url,
+          filename,
+        );
+
+        return {
+          type: "input_file",
+          file_id: fileId,
+        };
+      }
+
+      return part;
+    }),
+  );
+}
 
   if (useResponsesApi && v.role === "assistant" && Array.isArray(content)) {
     content = content.map((part: any) =>

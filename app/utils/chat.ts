@@ -112,41 +112,55 @@ export async function preProcessImageContentForResponses(
 
   if (typeof processed === "string") {
     return [
-  {
-    type: role === "assistant" ? "output_text" : "input_text",
-    text: processed,
-  },
-];
+      {
+        type: role === "assistant" ? "output_text" : "input_text",
+        text: processed,
+      },
+    ];
   }
 
   return processed
-  .map((part: any) => {
-    if (
-      part?.type === "text" ||
-      part?.type === "input_text" ||
-      part?.type === "output_text"
-    ) {
-      return {
-        type: role === "assistant" ? "output_text" : "input_text",
-        text: part.text ?? "",
-      };
-    }
-
-    if (part?.type === "input_image" || part?.type === "image_url") {
-      if (role === "assistant") {
+    .map((part: any) => {
+      if (
+        part?.type === "text" ||
+        part?.type === "input_text" ||
+        part?.type === "output_text"
+      ) {
         return {
-          type: "output_text",
-          text: "[Imagen adjunta/generada]",
+          type: role === "assistant" ? "output_text" : "input_text",
+          text: part.text ?? "",
         };
       }
 
-      return part;
-    }
+      if (part?.type === "input_image" || part?.type === "image_url") {
+        if (role === "assistant") {
+          return {
+            type: "output_text",
+            text: "[Imagen adjunta/generada]",
+          };
+        }
 
-    return null;
-  })
-  .filter(Boolean);
-  }
+        return part;
+      }
+
+      if (part?.type === "file" && part?.file) {
+        if (role === "assistant") {
+          return {
+            type: "output_text",
+            text: `[Archivo adjunto: ${part.file.name}]`,
+          };
+        }
+
+        return {
+          type: "input_file",
+          file_url: part.file.url,
+        };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+}
 export async function preProcessImageContentForAlibabaDashScope(
   content: RequestMessage["content"],
 ) {
@@ -205,6 +219,25 @@ export function uploadImage(file: Blob): Promise<string> {
       if (res?.code == 0 && res?.data) {
         return res?.data;
       }
+      throw Error(`upload Error: ${res?.msg}`);
+    });
+}
+export function uploadFile(file: Blob): Promise<string> {
+  const body = new FormData();
+  body.append("file", file);
+
+  return fetch(UPLOAD_URL, {
+    method: "post",
+    body,
+    mode: "cors",
+    credentials: "include",
+  })
+    .then((res) => res.json())
+    .then((res) => {
+      if (res?.code == 0 && res?.data) {
+        return res.data;
+      }
+
       throw Error(`upload Error: ${res?.msg}`);
     });
 }
